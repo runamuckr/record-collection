@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>My Record Collection</title>
+  <style>
+    :root {color-scheme:light; font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif; color:#20252b; background:#f5f6f8}
+    * {box-sizing:border-box}
+    body {margin:0; padding:24px 16px 60px}
+    main {max-width:1050px; margin:auto}
+    h1 {font-size:clamp(1.6rem,4vw,2.3rem); margin:0 0 6px}
+    .intro {color:#667080; margin:0 0 24px}
+    .toolbar {display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; margin-bottom:12px}
+    input {width:min(100%,420px); padding:12px 14px; font:inherit; border:1px solid #cdd3da; border-radius:8px; background:white}
+    input:focus {outline:2px solid #5879bc; outline-offset:2px}
+    #count {color:#566171; font-size:.92rem}
+    .table-wrap {background:#fff; border:1px solid #dce1e7; border-radius:10px; overflow:auto; box-shadow:0 2px 12px #2530470b}
+    table {border-collapse:collapse; width:100%; min-width:470px}
+    th,td {padding:12px 16px; text-align:left; border-bottom:1px solid #edf0f3}
+    th {background:#eef1f5; position:sticky; top:0; font-size:.9rem}
+    th button {background:none; border:0; padding:0; font:inherit; font-weight:700; color:inherit; cursor:pointer; text-align:left}
+    th button:hover {text-decoration:underline}
+    tbody tr:hover {background:#f8faff}
+    tbody tr:last-child td {border-bottom:0}
+    td:last-child {white-space:nowrap; width:100px; font-variant-numeric:tabular-nums}
+    .notice {padding:14px 16px; background:#fff; border:1px solid #dce1e7; border-radius:8px; margin:14px 0}
+    .error {color:#9b3030}
+    .hidden {display:none}
+    footer {color:#747d89; font-size:.82rem; margin-top:18px}
+  </style>
+</head>
+<body>
+<main>
+  <h1>My Record Collection</h1>
+  <p class="intro">A chronological catalog of my records.</p>
+  <div class="toolbar">
+    <input id="search" type="search" placeholder="Search albums, artists, or years…" aria-label="Search collection">
+    <span id="count" aria-live="polite">Loading records…</span>
+  </div>
+  <div id="notice" class="notice hidden" role="status"></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr>
+        <th><button type="button" data-sort="title">Title <span data-arrow="title"></span></button></th>
+        <th><button type="button" data-sort="artist">Artist <span data-arrow="artist"></span></button></th>
+        <th><button type="button" data-sort="year">Year <span data-arrow="year">↑</span></button></th>
+      </tr></thead>
+      <tbody id="records"></tbody>
+    </table>
+  </div>
+  <footer>Click any column heading to sort. Data is read from a published Google Sheet.</footer>
+</main>
+<script>
+  // Published Google Sheets CSV feed. Update this URL if you change the published tab.
+  const SHEET_CSV_URL = "https://docs.google.com/spreadsheets/d/e/2PACX-1vSI8QzVm8jpjt0ha6R9NZxatCO9D3ICyOSPofX_J9ZTTVPgJBnxwNqftE7qGG_dwbK041RNGSv8RIVB/pub?gid=1371074926&single=true&output=csv";
+
+  const tbody = document.querySelector('#records');
+  const search = document.querySelector('#search');
+  const count = document.querySelector('#count');
+  const notice = document.querySelector('#notice');
+  let records = [];
+  let sorting = {column:'year', direction:1};
+  const collator = new Intl.Collator(undefined,{numeric:true,sensitivity:'base'});
+
+  // Parse CSV properly, including quoted titles containing commas or newlines.
+  function parseCSV(text) {
+    const rows=[]; let row=[], field='', quoted=false;
+    text=text.replace(/^\uFEFF/,'');
+    for(let i=0;i<text.length;i++) {
+      const char=text[i];
+      if(char==='"') {
+        if(quoted && text[i+1]==='"') {field+='"';i++;}
+        else {quoted=!quoted;}
+      } else if(char===',' && !quoted) {row.push(field);field='';}
+      else if((char==='\n'||char==='\r') && !quoted) {
+        if(char==='\r' && text[i+1]==='\n') i++;
+        row.push(field); rows.push(row);row=[];field='';
+      } else {field+=char;}
+    }
+    if(field!==''||row.length) {row.push(field);rows.push(row);}
+    return rows;
+  }
+  function render() {
+    const query=search.value.trim().toLocaleLowerCase();
+    const filtered=records.filter(r=>[r.title,r.artist,r.year].some(x=>x.toLocaleLowerCase().includes(query)));
+    filtered.sort((a,b)=>{
+      if(sorting.column==='year') {
+        const ay=Number(a.year),by=Number(b.year);
+        if(a.year && b.year && Number.isFinite(ay)&&Number.isFinite(by) && ay!==by) return (ay-by)*sorting.direction;
+      } else {
+        const result=collator.compare(a[sorting.column],b[sorting.column]);
+        if(result) return result*sorting.direction;
+      }
+      return a.index-b.index;
+    });
+    tbody.replaceChildren();
+    const fragment=document.createDocumentFragment();
+    for(const record of filtered) {
+      const tr=document.createElement('tr');
+      for(const key of ['title','artist','year']) {
+        const td=document.createElement('td');td.textContent=record[key];tr.append(td);
+      }
+      fragment.append(tr);
+    }
+    tbody.append(fragment);
+    count.textContent=query?`${filtered.length} of ${records.length} records`:`${records.length} records`;
+    document.querySelectorAll('[data-arrow]').forEach(el=>{
+      el.textContent=el.dataset.arrow===sorting.column?(sorting.direction===1?'↑':'↓'):'';
+    });
+  }
+  function showNotice(message,isError=false) {
+    notice.textContent=message;notice.classList.remove('hidden');
+    notice.classList.toggle('error',isError);
+  }
+  document.querySelectorAll('[data-sort]').forEach(button=>button.addEventListener('click',()=>{
+    const column=button.dataset.sort;
+    sorting={column,direction:sorting.column===column?-sorting.direction:1};
+    render();
+  }));
+  search.addEventListener('input',render);
+
+  async function load() {
+    if(SHEET_CSV_URL.includes('PASTE_YOUR_')) {
+      count.textContent='Setup needed';
+      showNotice('To show your records, open index.html in a text editor and replace https://docs.google.com/spreadsheets/d/e/2PACX-1vSI8QzVm8jpjt0ha6R9NZxatCO9D3ICyOSPofX_J9ZTTVPgJBnxwNqftE7qGG_dwbK041RNGSv8RIVB/pub?gid=1371074926&single=true&output=csv with your Google Sheet’s published CSV link.');
+      return;
+    }
+    try {
+      const response=await fetch(SHEET_CSV_URL,{cache:'no-store'});
+      if(!response.ok) throw new Error(`HTTP ${response.status}`);
+      const rows=parseCSV(await response.text());
+      const headers=rows.shift()?.map(h=>h.trim().toLowerCase()) || [];
+      const column={title:headers.indexOf('title'),artist:headers.indexOf('artist'),year:headers.indexOf('year')};
+      if(Object.values(column).some(i=>i<0)) throw new Error('The sheet must have Title, Artist, and Year headers.');
+      records=rows.map((row,index)=>({title:(row[column.title]||'').trim(),artist:(row[column.artist]||'').trim(),year:(row[column.year]||'').trim(),index}))
+        .filter(r=>r.title||r.artist||r.year);
+      notice.classList.add('hidden'); render();
+    } catch(error) {
+      count.textContent='Could not load records';
+      showNotice(`Unable to load the published sheet. Check the CSV link and that the sheet is published. (${error.message})`,true);
+    }
+  }
+  load();
+</script>
+</body>
+</html>
